@@ -239,17 +239,7 @@ jobs:
           "
 
       # ===================================================
-      # STEP 8: Upload results as Artifacts
-      # ===================================================
-      - name: Upload scan results
-        uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: semgrep-results-${{ github.actor }}
-          path: results/
-          retention-days: 30
-      # ===================================================
-      # STEP 9: Export CSV
+      # STEP 8: Export CSV
       # ===================================================
       - name: Export CSV
         if: always()
@@ -259,7 +249,6 @@ jobs:
 
           RESULTS_DIR = "results"
 
-          # Load LOC data
           loc_data = {}
           try:
             with open(f"{RESULTS_DIR}/loc_summary.json") as f:
@@ -362,3 +351,14 @@ jobs:
           for r in summary_rows:
             print(f"{r['version']:<12} {r['loc_total']:>8,} {r['sast_findings']:>6} {r['density_per_1kloc']:>10.4f} {r['sca_total']:>6} {r['cve_count']:>6}")
           PYEOF
+
+      # ===================================================
+      # STEP 9: Upload results as Artifacts
+      # ===================================================
+      - name: Upload scan results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: semgrep-results-${{ github.actor }}
+          path: results/
+          retention-days: 30
