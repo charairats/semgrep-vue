@@ -1,8 +1,8 @@
 name: Semgrep Vue3 Version Scanner
 
 on:
-  workflow_dispatch:  # trigger manual จาก Actions tab
-  push :
+  workflow_dispatch:
+  push:
     branches:
       - main
 
@@ -22,7 +22,7 @@ jobs:
       # คน 5: "v3.4.0 v3.4.28 v3.4.22 v3.4.32"
       # คน 6: "v3.5.0 v3.5.14 v3.5.15 v3.5.13"
       # =============================================
-      VERSIONS: "v3.0.0 v3.0.8 v3.0.6 v3.0.4"
+      VERSIONS: "v3.1.0 v3.1.5 v3.1.3 v3.1.2"
 
     steps:
       # ===================================================
@@ -247,17 +247,25 @@ jobs:
       - name: Export CSV
         if: always()
         run: |
-          python3 << 'PYEOF'
+          python3 << 'INNEREOF'
           import json, glob, os, csv
 
           RESULTS_DIR = "results"
+
+          def normalize_severity(raw):
+              s = raw.upper()
+              if s == "CRITICAL":            return "Critical"
+              if s in ("ERROR", "HIGH"):     return "High"
+              if s in ("WARNING", "MEDIUM"): return "Medium"
+              if s in ("INFO", "LOW"):       return "Low"
+              return "Low"
 
           loc_data = {}
           try:
             with open(f"{RESULTS_DIR}/loc_summary.json") as f:
               loc_data = json.load(f)
           except:
-            print("⚠️  loc_summary.json not found")
+            print("Warning: loc_summary.json not found")
 
           # --- SAST CSV ---
           sast_rows = []
@@ -269,7 +277,7 @@ jobs:
                 sast_rows.append({
                   "version":  version,
                   "rule_id":  r.get("check_id", ""),
-                  "severity": r.get("extra", {}).get("severity", ""),
+                  "severity": normalize_severity(r.get("extra", {}).get("severity", "")),
                   "file":     r.get("path", ""),
                   "line":     r.get("start", {}).get("line", ""),
                   "message":  r.get("extra", {}).get("message", "")[:200],
@@ -281,7 +289,7 @@ jobs:
             w = csv.DictWriter(f, fieldnames=["version","rule_id","severity","file","line","message"])
             w.writeheader()
             w.writerows(sast_rows)
-          print(f"✅ SAST: {len(sast_rows)} findings → sast_findings.csv")
+          print(f"SAST: {len(sast_rows)} findings -> sast_findings.csv")
 
           # --- SCA CSV ---
           sca_rows = []
@@ -294,7 +302,7 @@ jobs:
                 sca_rows.append({
                   "version":          version,
                   "cve":              meta.get("cve", ""),
-                  "severity":         r.get("extra", {}).get("severity", ""),
+                  "severity":         normalize_severity(r.get("extra", {}).get("severity", "")),
                   "package":          meta.get("package", ""),
                   "version_affected": meta.get("vulnerable_versions", ""),
                   "file":             r.get("path", ""),
@@ -308,7 +316,7 @@ jobs:
             w = csv.DictWriter(f, fieldnames=["version","cve","severity","package","version_affected","file","line","message"])
             w.writeheader()
             w.writerows(sca_rows)
-          print(f"✅ SCA:  {len(sca_rows)} findings → sca_findings.csv")
+          print(f"SCA:  {len(sca_rows)} findings -> sca_findings.csv")
 
           # --- Summary CSV ---
           summary_rows = []
@@ -317,43 +325,71 @@ jobs:
             versions.add(os.path.basename(f).replace("_sast.json",""))
 
           for version in sorted(versions):
-            sast_count = sca_total = cve_count = 0
+            sast_crit = sast_high = sast_med = sast_low = 0
+            sca_total = cve_count = sca_crit = sca_high = sca_med = sca_low = 0
+
             try:
               d = json.load(open(f"{RESULTS_DIR}/{version}_sast.json"))
-              sast_count = len(d.get("results", []))
+              for r in d.get("results", []):
+                s = normalize_severity(r.get("extra",{}).get("severity",""))
+                if s == "Critical":   sast_crit += 1
+                elif s == "High":     sast_high += 1
+                elif s == "Medium":   sast_med  += 1
+                else:                 sast_low  += 1
             except: pass
+
             try:
               d = json.load(open(f"{RESULTS_DIR}/{version}_sca.json"))
               results = d.get("results", [])
               sca_total = len(results)
               cve_count = len([r for r in results if r.get("extra",{}).get("metadata",{}).get("cve","")])
+              for r in results:
+                s = normalize_severity(r.get("extra",{}).get("severity",""))
+                if s == "Critical":   sca_crit += 1
+                elif s == "High":     sca_high += 1
+                elif s == "Medium":   sca_med  += 1
+                else:                 sca_low  += 1
             except: pass
 
             loc = loc_data.get(version, {}).get("total", 0)
-            density = round((sast_count / loc) * 1000, 4) if loc > 0 else 0
+            sast_total = sast_crit + sast_high + sast_med + sast_low
+            density = round((sast_total / loc) * 1000, 4) if loc > 0 else 0
+
             summary_rows.append({
               "version":           version,
               "loc_total":         loc,
               "loc_typescript":    loc_data.get(version, {}).get("TypeScript", 0),
               "loc_javascript":    loc_data.get(version, {}).get("JavaScript", 0),
-              "sast_findings":     sast_count,
+              "sast_total":        sast_total,
+              "sast_critical":     sast_crit,
+              "sast_high":         sast_high,
+              "sast_medium":       sast_med,
+              "sast_low":          sast_low,
               "density_per_1kloc": density,
               "sca_total":         sca_total,
+              "sca_critical":      sca_crit,
+              "sca_high":          sca_high,
+              "sca_medium":        sca_med,
+              "sca_low":           sca_low,
               "cve_count":         cve_count,
             })
 
           with open(f"{RESULTS_DIR}/summary.csv", "w", newline="", encoding="utf-8") as f:
-            w = csv.DictWriter(f, fieldnames=["version","loc_total","loc_typescript","loc_javascript","sast_findings","density_per_1kloc","sca_total","cve_count"])
+            w = csv.DictWriter(f, fieldnames=[
+              "version","loc_total","loc_typescript","loc_javascript",
+              "sast_total","sast_critical","sast_high","sast_medium","sast_low","density_per_1kloc",
+              "sca_total","sca_critical","sca_high","sca_medium","sca_low","cve_count"
+            ])
             w.writeheader()
             w.writerows(summary_rows)
-          print(f"✅ Summary: {len(summary_rows)} versions → summary.csv")
+          print(f"Summary: {len(summary_rows)} versions -> summary.csv")
 
           print()
-          print(f"{'Version':<12} {'LOC':>8} {'SAST':>6} {'Density':>10} {'SCA':>6} {'CVEs':>6}")
-          print("-" * 55)
+          print(f"{'Version':<12} {'LOC':>8} {'S_CRIT':>7} {'S_HIGH':>7} {'S_MED':>7} {'S_LOW':>7} {'Density':>10} {'SC_CRIT':>8} {'SC_HIGH':>8} {'SC_MED':>8} {'SC_LOW':>8} {'CVEs':>6}")
+          print("-" * 105)
           for r in summary_rows:
-            print(f"{r['version']:<12} {r['loc_total']:>8,} {r['sast_findings']:>6} {r['density_per_1kloc']:>10.4f} {r['sca_total']:>6} {r['cve_count']:>6}")
-          PYEOF
+            print(f"{r['version']:<12} {r['loc_total']:>8,} {r['sast_critical']:>7} {r['sast_high']:>7} {r['sast_medium']:>7} {r['sast_low']:>7} {r['density_per_1kloc']:>10.4f} {r['sca_critical']:>8} {r['sca_high']:>8} {r['sca_medium']:>8} {r['sca_low']:>8} {r['cve_count']:>6}")
+          INNEREOF
 
       # ===================================================
       # STEP 9: Upload results as Artifacts
